@@ -9,6 +9,10 @@ function(add_codegen_targets
 )
     set(cache_path "${CMAKE_CURRENT_BINARY_DIR}/codegen_cache")
 
+    if ("${CODEGEN_ROOT}" STREQUAL "")
+        message(FATAL_ERROR "CODEGEN_ROOT is not set!")
+    endif()
+
     #
     # Find our python interpreter, and set up some python related variables.
     #
@@ -37,30 +41,6 @@ function(add_codegen_targets
     if ("${CLANG_LIBRARY}" STREQUAL "CLANG_LIBRARY-NOTFOUND")
         message(SEND_ERROR "libclang not found")
         set(missing_requirements TRUE)
-    endif()
-
-    #
-    # Find the codegen python package file
-    #
-    if ("${CODEGEN_PACKAGE}" STREQUAL "")
-        foreach (prefix ${CMAKE_PREFIX_PATH})
-            set(codegen_package_candidate "${prefix}/share/codegen/codegen-0.1.0.tar.gz")
-            if (EXISTS "${codegen_package_candidate}")
-                set(CODEGEN_PACKAGE "${codegen_package_candidate}")
-                break()
-            endif()
-        endforeach()
-        if ("${CODEGEN_PACKAGE}" STREQUAL "")
-            set(CODEGEN_PACKAGE "CODEGEN_PACKAGE-NOTFOUND" CACHE FILEPATH "")
-        endif()
-    endif()
-    if ("${CODEGEN_PACKAGE}" STREQUAL "CODEGEN_PACKAGE-NOTFOUND")
-        message(SEND_ERROR "codegen package not found")
-        set(missing_requirements TRUE)
-    endif()
-
-    if (missing_requirements)
-        message(FATAL_ERROR "Missing requirements")
     endif()
 
     #
@@ -125,39 +105,26 @@ function(add_codegen_targets
         endif()
 
         #
-        # Install the codegen package with pip
-        #
-        execute_process(
-            COMMAND
-                "${venv_path}/${venv_python_executable_path}" -m pip
-                install "${CODEGEN_PACKAGE}"
-            RESULT_VARIABLE pip_result
-        )
-        if (NOT pip_result EQUAL 0)
-            message(FATAL_ERROR "Failed to install codegen packages into codegen virtualenv. result: ${pip_result}.")
-        endif()
-        file(TOUCH "${package_dummy}")
-
-        #
         # Create the dummy file to signify that we have successfully created the venv.
         #
         file(TOUCH "${venv_dummy}")
     endif()
 
+
     #
-    # Add build-time target to update the codegen package if it's touched.
+    # Install the dependencies with pip
     #
-    add_custom_command(
-        OUTPUT
-            "${package_dummy}"
+    execute_process(
         COMMAND
             "${venv_path}/${venv_python_executable_path}" -m pip
-            install "${CODEGEN_PACKAGE}"
-        COMMAND
-            "${CMAKE_COMMAND}" "-E" "touch" "${package_dummy}"
-        DEPENDS
-            "${CODEGEN_PACKAGE}"
+            install -r "${CODEGEN_ROOT}/requirements.txt"
+        RESULT_VARIABLE pip_result
     )
+    if (NOT pip_result EQUAL 0)
+        message(FATAL_ERROR "Failed to install codegen dependencies into codegen virtualenv. result: ${pip_result}.")
+    endif()
+    file(TOUCH "${package_dummy}")
+
 
     set(include_directories_arguments "")
     foreach(include_directory ${include_directories})
@@ -194,6 +161,7 @@ function(add_codegen_targets
         if (NOT "${cached_outputs_are_ok}")
             execute_process(
                 COMMAND
+                    "${CMAKE_COMMAND}" -E env "PYTHONPATH=${CODEGEN_ROOT}"
                     "${venv_path}/${venv_python_executable_path}" "-m" "codegen"
                     "get_output_files"
                     "${current_source_file}"
@@ -211,7 +179,6 @@ function(add_codegen_targets
             endif()
         endif()
 
-
         #
         # Set up a build target for the outputs given to us by the above commands.
         #
@@ -228,6 +195,7 @@ function(add_codegen_targets
         add_custom_command(
             OUTPUT "${current_output_files}"
             COMMAND
+                "${CMAKE_COMMAND}" -E env "PYTHONPATH=${CODEGEN_ROOT}"
                 "${venv_path}/${venv_python_executable_path}" "-m" "codegen"
                 "generate"
                 "${current_source_file}"
@@ -235,7 +203,7 @@ function(add_codegen_targets
                 "--libclangpath" "${CLANG_LIBRARY}"
                 "--source-root" "${input_root}"
                 "--output-root" "${output_root}"
-            DEPENDS "${current_source_file}" "${package_dummy}"
+            DEPENDS "${current_source_file}"
         )
 
     endforeach()
